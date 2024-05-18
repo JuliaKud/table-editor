@@ -2,15 +2,17 @@ import javax.swing.*
 import java.awt.*
 import javax.swing.table.DefaultTableModel
 import kotlin.math.abs
+import kotlin.math.round
+import kotlin.math.sqrt
 
 enum class TokenType {
-    NUMBER, SYMBOL, ABS, END
+    NUMBER, SYMBOL, ABS, SQRT, ROUND, END
 }
 
 class Tokenizer(private val input: String) {
     var type: TokenType = TokenType.END
         private set
-    var number: Long = 0
+    var number: Double = 0.0
         private set
     var symbol: Char = '0'
         private set
@@ -34,7 +36,7 @@ class Tokenizer(private val input: String) {
             while(i < input.length && input[i].isDigit()) {
                 strNumber += input[i++]
             }
-            number = strNumber.toLong()
+            number = strNumber.toDouble()
             type = TokenType.NUMBER
         } else if(symbol == '$') {
             var cell = ""
@@ -42,7 +44,7 @@ class Tokenizer(private val input: String) {
                 cell += input[i++]
             }
             val cellValue = getCellValue(cell)
-            number = cellValue.toLong()
+            number = cellValue.toDouble()
 
             type = TokenType.NUMBER
         } else if(symbol.isLetter()) {
@@ -50,8 +52,10 @@ class Tokenizer(private val input: String) {
             while(i < input.length && input[i].isLetter()) {
                 funcName += input[i++].toString()
             }
-            if(funcName == "abs") {
-                type = TokenType.ABS
+            when (funcName) {
+                "abs" -> type = TokenType.ABS
+                "sqrt" -> type = TokenType.SQRT
+                "round" -> type = TokenType.ROUND
             }
         } else {
             type = TokenType.SYMBOL
@@ -60,35 +64,43 @@ class Tokenizer(private val input: String) {
 }
 
 abstract class Expression {
-    abstract fun evaluate(): Long
+    abstract fun evaluate(): Double
 }
 
-class NumberExpr(private val number: Long) : Expression() {
-    override fun evaluate(): Long = number
+class NumberExpr(private val number: Double) : Expression() {
+    override fun evaluate(): Double = number
 }
 
 class UnaryMinusExpr(private val expr: Expression) : Expression() {
-    override fun evaluate(): Long = -expr.evaluate()
+    override fun evaluate(): Double = -expr.evaluate()
 }
 
 class PlusExpr(private val lhs: Expression, private val rhs: Expression) : Expression() {
-    override fun evaluate(): Long = lhs.evaluate() + rhs.evaluate()
+    override fun evaluate(): Double = lhs.evaluate() + rhs.evaluate()
 }
 
 class MinusExpr(private val lhs: Expression, private val rhs: Expression) : Expression() {
-    override fun evaluate(): Long = lhs.evaluate() - rhs.evaluate()
+    override fun evaluate(): Double = lhs.evaluate() - rhs.evaluate()
 }
 
 class MultiplyExpr(private val lhs: Expression, private val rhs: Expression) : Expression() {
-    override fun evaluate(): Long = lhs.evaluate() * rhs.evaluate()
+    override fun evaluate(): Double = lhs.evaluate() * rhs.evaluate()
 }
 
 class DivideExpr(private val lhs: Expression, private val rhs: Expression) : Expression() {
-    override fun evaluate(): Long = lhs.evaluate() / rhs.evaluate()
+    override fun evaluate(): Double = lhs.evaluate() / rhs.evaluate()
 }
 
 class AbsExpr(private val expr: Expression) : Expression() {
-    override fun evaluate(): Long = abs(expr.evaluate())
+    override fun evaluate(): Double = abs(expr.evaluate())
+}
+
+class SqrtExpr(private val expr: Expression) : Expression() {
+    override fun evaluate(): Double = sqrt(expr.evaluate())
+}
+
+class RoundExpr(private val expr: Expression) : Expression() {
+    override fun evaluate(): Double = round(expr.evaluate())
 }
 
 fun parseExpression(tokenizer: Tokenizer, layer: Int = 0, prev: Expression? = null): Expression? {
@@ -134,15 +146,23 @@ fun parseExpression(tokenizer: Tokenizer, layer: Int = 0, prev: Expression? = nu
             val expr = AbsExpr(next(4)!!)
             return parseExpression(tokenizer, layer, expr)
         }
+        TokenType.SQRT -> {
+            val expr = SqrtExpr(next(4)!!)
+            return parseExpression(tokenizer, layer, expr)
+        }
+        TokenType.ROUND -> {
+            val expr = RoundExpr(next(4)!!)
+            return parseExpression(tokenizer, layer, expr)
+        }
         TokenType.END -> return prev
     }
     return prev
 }
 
-fun evaluateExpression(expression: String): Long {
+fun evaluateExpression(expression: String): Double? {
     val tokenizer = Tokenizer(expression)
     val expr = parseExpression(tokenizer)
-    return expr?.evaluate() ?: 0
+    return expr?.evaluate()
 }
 
 fun getCellValue(cellRef: String): String {
@@ -174,7 +194,11 @@ class CustomTableModel(rowCount: Int, columnCount: Int) : DefaultTableModel(rowC
     override fun setValueAt(value: Any?, row: Int, column: Int) {
         if (value is String && value.startsWith("=")) {
             val cellValue = evaluateExpression(value.substring(1))
-            super.setValueAt(cellValue, row, column)
+            if(cellValue != null) {
+                super.setValueAt(cellValue, row, column)
+            } else {
+                super.setValueAt("#INCORRECT_FORMULA", row, column)
+            }
         } else {
             super.setValueAt(value, row, column)
         }
