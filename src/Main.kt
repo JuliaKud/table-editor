@@ -1,12 +1,10 @@
 import javax.swing.*
 import java.awt.*
 import javax.swing.table.DefaultTableModel
-import kotlin.math.abs
-import kotlin.math.round
-import kotlin.math.sqrt
+import kotlin.math.*
 
 enum class TokenType {
-    NUMBER, SYMBOL, ABS, SQRT, ROUND, END
+    NUMBER, SYMBOL, FUNCTION, END
 }
 
 class Tokenizer(private val input: String) {
@@ -16,6 +14,10 @@ class Tokenizer(private val input: String) {
         private set
     var symbol: Char = '0'
         private set
+    var invalid = false
+        private set
+    var function: String = ""
+        private set
     private var i = 0
 
     init {
@@ -23,40 +25,51 @@ class Tokenizer(private val input: String) {
     }
 
     fun consume() {
-        if(i >= input.length) {
+        if (i >= input.length) {
             type = TokenType.END
             return
         }
 
-        while(input[i].isWhitespace()) { ++i; }
+        while (input[i].isWhitespace()) {
+            ++i
+        }
+
         symbol = input[i++]
 
         if (symbol.isDigit()) {
             var strNumber = symbol.toString()
-            while(i < input.length && input[i].isDigit()) {
+            while (i < input.length && (input[i].isDigit() || input[i] == '.')) {
                 strNumber += input[i++]
             }
             number = strNumber.toDouble()
             type = TokenType.NUMBER
-        } else if(symbol == '$') {
+        } else if (symbol == '$') {
             var cell = ""
-            while(i < input.length && (input[i].isDigit() || input[i].isLetter())) {
+            while (i < input.length && input[i].isLetter()) {
+                cell += input[i++]
+            }
+            while (i < input.length && input[i].isDigit()) {
                 cell += input[i++]
             }
             val cellValue = getCellValue(cell)
+            if(cellValue == null) {
+                invalid = true
+                return
+            }
             number = cellValue.toDouble()
-
             type = TokenType.NUMBER
-        } else if(symbol.isLetter()) {
+        } else if (symbol.isLetter()) {
             var funcName = symbol.toString()
-            while(i < input.length && input[i].isLetter()) {
+            while (i < input.length && input[i].isLetter()) {
                 funcName += input[i++].toString()
             }
-            when (funcName) {
-                "abs" -> type = TokenType.ABS
-                "sqrt" -> type = TokenType.SQRT
-                "round" -> type = TokenType.ROUND
+            if(funcName !in setOf("abs", "sqrt", "round", "pow", "max", "min")) {
+                invalid = true
+                return
             }
+            function = funcName
+            type = TokenType.FUNCTION
+            TokenType.FUNCTION
         } else {
             type = TokenType.SYMBOL
         }
@@ -103,10 +116,21 @@ class RoundExpr(private val expr: Expression) : Expression() {
     override fun evaluate(): Double = round(expr.evaluate())
 }
 
+class PowExpr(private val base: Expression, private val exponent: Expression) : Expression() {
+    override fun evaluate(): Double = base.evaluate().pow(exponent.evaluate())
+}
+
+class MaxExpr(private val num1: Expression, private val num2: Expression) : Expression() {
+    override fun evaluate(): Double = max(num1.evaluate(), num2.evaluate())
+}
+
 fun parseExpression(tokenizer: Tokenizer, layer: Int = 0, prev: Expression? = null): Expression? {
-    fun next(layer: Int = 0) : Expression? {
+    fun next(layer: Int = 0): Expression? {
         tokenizer.consume()
         return parseExpression(tokenizer, layer)
+    }
+    if (tokenizer.invalid) {
+        return null
     }
     when (tokenizer.type) {
         TokenType.NUMBER -> {
@@ -114,11 +138,13 @@ fun parseExpression(tokenizer: Tokenizer, layer: Int = 0, prev: Expression? = nu
             tokenizer.consume()
             return parseExpression(tokenizer, layer, expr)
         }
+
         TokenType.SYMBOL -> when (tokenizer.symbol) {
             '+' -> if (layer < 1) {
                 val expr = PlusExpr(prev!!, next(1)!!)
                 return parseExpression(tokenizer, layer, expr)
             }
+
             '-' -> {
                 if (prev == null) {
                     val expr = UnaryMinusExpr(next(3)!!)
@@ -129,31 +155,52 @@ fun parseExpression(tokenizer: Tokenizer, layer: Int = 0, prev: Expression? = nu
                     return parseExpression(tokenizer, layer, expr)
                 }
             }
+
             '*' -> if (layer < 2) {
                 val expr = MultiplyExpr(prev!!, next(2)!!)
                 return parseExpression(tokenizer, layer, expr)
             }
+
             '/' -> if (layer < 2) {
                 val expr = DivideExpr(prev!!, next(2)!!)
                 return parseExpression(tokenizer, layer, expr)
             }
+
             '(' -> return parseExpression(tokenizer, layer, next())
             ')' -> if (layer == 0) {
                 tokenizer.consume()
             }
         }
-        TokenType.ABS -> {
-            val expr = AbsExpr(next(4)!!)
-            return parseExpression(tokenizer, layer, expr)
+
+        TokenType.FUNCTION -> when (tokenizer.function) {
+            "abs" -> {
+                val expr = AbsExpr(next(4)!!)
+                return parseExpression(tokenizer, layer, expr)
+            }
+
+            "sqrt" -> {
+                val expr = SqrtExpr(next(4)!!)
+                return parseExpression(tokenizer, layer, expr)
+            }
+
+            "round" -> {
+                val expr = RoundExpr(next(4)!!)
+                return parseExpression(tokenizer, layer, expr)
+            }
+
+            "pow" -> {
+                tokenizer.consume()
+                val expr = PowExpr(next(4)!!, next(4)!!)
+                return parseExpression(tokenizer, layer, expr)
+            }
+
+            "max" -> {
+                tokenizer.consume()
+                val expr = MaxExpr(next(4)!!, next(4)!!)
+                return parseExpression(tokenizer, layer, expr)
+            }
         }
-        TokenType.SQRT -> {
-            val expr = SqrtExpr(next(4)!!)
-            return parseExpression(tokenizer, layer, expr)
-        }
-        TokenType.ROUND -> {
-            val expr = RoundExpr(next(4)!!)
-            return parseExpression(tokenizer, layer, expr)
-        }
+
         TokenType.END -> return prev
     }
     return prev
@@ -165,10 +212,10 @@ fun evaluateExpression(expression: String): Double? {
     return expr?.evaluate()
 }
 
-fun getCellValue(cellRef: String): String {
+fun getCellValue(cellRef: String): String? {
     val column = cellRef[0].uppercaseChar() - 'A'
     val row = cellRef.substring(1).toInt() - 1
-    return tableModel.getValueAt(row, column).toString()
+    return tableModel.getValueAt(row, column)?.toString()
 }
 
 val tableModel: DefaultTableModel = CustomTableModel(30, 10)
@@ -187,6 +234,17 @@ class TableEditor : JFrame() {
 
         val scrollPane = JScrollPane(table)
         contentPane.add(scrollPane, BorderLayout.CENTER)
+
+        val rowHeader = JViewport()
+        val rowHeaderList = JList<String>()
+        val rowHeaderModel = DefaultListModel<String>()
+        for (i in 0 until table.rowCount) {
+            rowHeaderModel.addElement((i + 1).toString())
+        }
+        rowHeaderList.model = rowHeaderModel
+        rowHeader.view = rowHeaderList
+        scrollPane.rowHeader = rowHeader
+        scrollPane.rowHeader.isVisible = true
     }
 }
 
@@ -194,7 +252,7 @@ class CustomTableModel(rowCount: Int, columnCount: Int) : DefaultTableModel(rowC
     override fun setValueAt(value: Any?, row: Int, column: Int) {
         if (value is String && value.startsWith("=")) {
             val cellValue = evaluateExpression(value.substring(1))
-            if(cellValue != null) {
+            if (cellValue != null) {
                 super.setValueAt(cellValue, row, column)
             } else {
                 super.setValueAt("#INCORRECT_FORMULA", row, column)
